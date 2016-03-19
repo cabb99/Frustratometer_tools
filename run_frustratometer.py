@@ -1,12 +1,13 @@
-import subprocess, shutil, os
+import subprocess, shutil, os, glob
 Temp_directory='/home/carlos/Programas/CFrustratometer/Temp'
 Selector='pdb_subset.py'
 Cleaner='/home/carlos/Programas/mmtsb/perl/convpdb.pl'
 PDB2lammps='/home/carlos/Programas/Frustratometer/PdbCoords2Lammps'
 strideexec='/home/carlos/Programas/Frustratometer/stride/stride'
 stride2ssweight='/home/carlos/Programas/Frustratometer/stride2ssweight.py'
-parameters='/home/carlos/Programas/Frustratometer/para'
-
+parameters='/home/carlos/Programas/Frustratometer/para/'
+awsem_para='/home/carlos/Programas/CFrustratometer/frust_fix_backbone_coeff.data'
+lammps_exec='/home/carlos/Programas/CFrustratometer/exec/lmp_serial_552_mod_frust_elec'
 
 def MakeDir(directory):    
     if not os.path.exists(directory):
@@ -61,7 +62,7 @@ def SSweight(pdb_file):
     g = open('ssweight.stride','w')
     g.writelines(stride)
     g.close()
-    commands=[stride2ssweight]
+    commands=['python',stride2ssweight]
     ssweight=subprocess.check_output(commands)  
     g = open('ssweight','w')
     g.writelines(ssweight)
@@ -105,19 +106,32 @@ def Frustration(pdb,chain='All',frustration='mutational',download=True,custom_aa
 
     #Convert the pdb to lammps input
     Pdb2Lammps(pdb_name,pdb_cname)
-    
-    #Write the lammps input for the frustratometer
+    with open('%s.in'%pdb_cname) as handle:
+        in_data=handle.read()
+    with open('%s.in'%pdb_cname,'w+') as handle:
+        for line in in_data.split('\n'):
+            if line=='run		10000':
+                handle.write('run  0\n')
+            else:
+                handle.write('%s\n'%line)
+            
     
     
     #Write the parameters for the AWSEM simulation
-    
+    for filename in glob.glob(os.path.join(parameters, '*')):
+        print filename        
+        shutil.copy(filename, '.')
+    shutil.copy(awsem_para,'fix_backbone_coeff.data')   
+
 
     #Recalculate the ssweight
     SSweight(pdb_name)
 
     #Run the frustratometer
-    
+    with open('%s.in'%pdb_cname) as lin:
+        subprocess.call([lammps_exec],stdin=lin)
 
+    os.chdir(return_dir)
     #return frustration_data
     
 
