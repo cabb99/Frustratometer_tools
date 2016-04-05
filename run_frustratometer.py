@@ -1,13 +1,14 @@
+#!/usr/bin/python
 import subprocess, shutil, os, glob
-Temp_directory='/home/carlos/Programas/CFrustratometer/Temp'
+Temp_directory='/home/cab22/Programs/CFrustratometer/Temp'
 Selector='pdb_subset.py'
-Cleaner='/home/carlos/Programas/mmtsb/perl/convpdb.pl'
-PDB2lammps='/home/carlos/Programas/Frustratometer/PdbCoords2Lammps'
-strideexec='/home/carlos/Programas/Frustratometer/stride/stride'
-stride2ssweight='/home/carlos/Programas/Frustratometer/stride2ssweight.py'
-parameters='/home/carlos/Programas/Frustratometer/para/'
-awsem_para='/home/carlos/Programas/CFrustratometer/frust_fix_backbone_coeff.data'
-lammps_exec='/home/carlos/Programas/CFrustratometer/exec/lmp_serial_552_mod_frust_elec'
+Cleaner='/home/cab22/Programs/mmtsb/perl/convpdb.pl'
+PDB2lammps='/home/cab22/Programs/Frustratometer/PdbCoords2Lammps'
+strideexec='/home/cab22/Programs/Frustratometer/stride/stride'
+stride2ssweight='/home/cab22/Programs/Frustratometer/stride2ssweight.py'
+parameters='/home/cab22/Programs/Frustratometer/para/'
+awsem_para='/home/cab22/Programs/CFrustratometer/frust_fix_backbone_coeff.data'
+lammps_exec='/home/cab22/Programs/CFrustratometer/exec/lmp_serial_552_mod_frust_elec'
 
 def MakeDir(directory):    
     if not os.path.exists(directory):
@@ -51,6 +52,20 @@ def Clean(pdb_file):
     g.close()
     return pdb_file
 
+def Renumber_resid(pdb_file):
+    from Bio.PDB import *
+    parser=PDBParser()
+    structure=parser.get_structure('Renumbered',pdb_file)
+    for model in structure:
+        i=1
+        for chain in model:
+            for residue in chain:
+                residue.id = (' ', i, ' ')
+                i=i+1
+    io = PDBIO()
+    io.set_structure(structure)
+    io.save(pdb_file)
+
 def Pdb2Lammps(pdb_file,name):
     commands=[PDB2lammps,pdb_file[:-4], name]
     f = open(os.devnull, 'w')
@@ -68,16 +83,15 @@ def SSweight(pdb_file):
     g.writelines(ssweight)
     g.close()
 
-def Frustration(pdb,chain='All',frustration='mutational',download=True,custom_aa_freq=False,clean=True):
+def Frustration(pdb,chain='All',frustration='mutational',download=True,custom_aa_freq=False,clean=True,
+lammps_exec=lammps_exec):
     print "Calculating frustration"
     pdb_loc=pdb    
     pdb_name=pdb_loc.split('/')[-1]
     pdb_cname=pdb_name    
     if pdb[-4:] == ".pdb":
         pdb_cname = pdb[:-4]
-    chain='AC'
-    frustration='mutational'
-    download=True
+
     #Make a directory
     print "Creating a directory"    
     directory='%s_%s_%s'%(pdb_cname,chain,frustration)    
@@ -93,18 +107,21 @@ def Frustration(pdb,chain='All',frustration='mutational',download=True,custom_aa
         shutil.copy(pdb_loc,'%s/%s'%(directory,pdb_name))
         pdb_loc='%s/%s'%(directory,pdb_name)
     
-    #Open the pdb and select only the correct chains
     return_dir=os.getcwd()    
     os.chdir(directory)
     pdb_name=pdb_loc.split('/')[-1] 
     
+    print "Cleaning pdb" 
     if chain<>'All':
         Select_chain(pdb_name,chain)
-
+    
     #Clean the pdb    
     Clean(pdb_name)
 
+    Renumber_resid(pdb_name)    
+    
     #Convert the pdb to lammps input
+    print "Creating lammps input"    
     Pdb2Lammps(pdb_name,pdb_cname)
     with open('%s.in'%pdb_cname) as handle:
         in_data=handle.read()
@@ -114,20 +131,25 @@ def Frustration(pdb,chain='All',frustration='mutational',download=True,custom_aa
                 handle.write('run  0\n')
             else:
                 handle.write('%s\n'%line)
-            
-    
-    
+
     #Write the parameters for the AWSEM simulation
     for filename in glob.glob(os.path.join(parameters, '*')):
-        print filename        
+        print "Copying",filename        
         shutil.copy(filename, '.')
-    shutil.copy(awsem_para,'fix_backbone_coeff.data')   
+    with open(awsem_para) as handle_in:
+        with open('fix_backbone_coeff.data','w+') as handle_out:
+            for line in handle_in:
+                #print line,frustration                
+                line=line.replace('configurational',frustration)
+                handle_out.write(line)   
 
 
     #Recalculate the ssweight
+    print "Recalculating SSweight"    
     SSweight(pdb_name)
 
     #Run the frustratometer
+    print "Running AWSEM"    
     with open('%s.in'%pdb_cname) as lin:
         subprocess.call([lammps_exec],stdin=lin)
 
@@ -140,11 +162,12 @@ def main():
     parser = argparse.ArgumentParser(description='Analyzes the frustration of the residues of a protein')
     parser.add_argument('PDB', type=str, nargs='*', help='PDB files to be analyzed')
     parser.add_argument('-c','--chain',nargs='*',default=['All'] ,action='store', help='Selects the chains for each PDB')
-    parser.add_argument('-f','--frustration', choices=['singleresidue','configurational','mutational','All'], help='Sets the frustration type used in the analysis')
+    parser.add_argument('-f','--frustration', choices=['singleresidue','configurational','mutational','All'],default='mutational', help='Sets the frustration type used in the analysis')
     parser.add_argument('--download',help='Downloads the PDB file if the file does not exists',action='store_true')
     parser.add_argument('--freq',nargs=1,help='Uses a custom aminoacid frequency from a csv table',action='store',default=None)
-    parser.add_argument('--awsem',nargs=1,help='Uses custom awsem parameters as input' ,action='store',default=None)
-    parser.add_argument('--awsem',nargs=1,help='Uses custom awsem parameters as input' ,action='store',default=None)
+    #parser.add_argument('--awsem',nargs=1,help='Uses custom awsem parameters as input' ,action='store',default=None)
+    parser.add_argument('--clean',help='Only returns the output if the frustration',action='store_true')
+    parser.add_argument('--lammps',nargs=1,help='Uses a custom lammps executable tu run the frustratometer' ,default=[lammps_exec])
     #parser.add_argument('args', nargs=argparse.REMAINDER)
     
     args = parser.parse_args()
@@ -180,9 +203,17 @@ def main():
          except IOError:
             parser.error('Could not open %s'%args.freq)
 
-    Frustration(pdb,chain,args.frustration,args.download)
+    if args.frustration=='All':
+        args.frustration=['singleresidue','configurational','mutational']
+    elif type(args.frustration)==str:
+        args.frustration=[args.frustration]
+    
+    for frustration in args.frustration:
+        for pdb,chain in zip(args.PDB,args.chain):    
+            print "Processing %s %s %s"%(pdb,chain,frustration)
+            Frustration(pdb,chain,frustration,args.download,args.freq,args.clean,lammps_exec=args.lammps[0])
 
 if __name__=='__main__':
-    Frustration('1jge','ABC','mutational')
+    main()
 
     
