@@ -1,0 +1,95 @@
+#!/bin/bash
+
+s=/home/cab22/Programs/Frustratometer/para #`pwd`
+
+if [[ ! $# -eq 2 ]]
+then
+        echo
+        echo "> $0 pdb_id project_name"
+        echo
+        exit
+fi
+
+pdbid_upper=`basename $1 .pdb`
+pdbid=`echo $pdbid_upper | tr [:upper:] [:lower:]`
+output=`basename $2 .pdb`
+strideexec=$s/../stride/stride
+stride2ssweightscript=$s/../stride2ssweight.py
+
+if [ $pdbid_upper != $pdbid ]; then
+	cp $pdbid_upper.pdb $pdbid.pdb
+fi
+
+echo $pdbid
+echo $output
+
+python $s/../PDBToCoordinates.py $pdbid $output.coord > tmp
+if grep -q 'Missing' tmp ; then
+	echo "There are missing atoms!"
+	cat tmp
+	echo "Invoking Modeller to add missing atoms..."
+	sleep 2
+	#read -p "Do you wish to invoke Modeller to add missing atoms, Master? (y/n) " key
+	key='y'
+	if [ "$key" == 'y' ]; then
+		sleep 1
+		echo "Calling $s/../complete_pdb.py ..."
+		python $s/../complete_pdb.py $pdbid.pdb mod_out.pdb
+		sed -i "s/HSD/HIS/" mod_out.pdb
+		echo "\nFixed missing atoms using Modeller!"
+		echo "Replace the pdb file by mod_out.pdb."
+		cp mod_out.pdb $pdbid.pdb
+		sleep 2
+	else
+		echo "Exit!"
+		exit
+	fi
+fi
+rm tmp
+
+echo "Proceeding..."
+python $s/../PDBToCoordinates.py $pdbid $output.coord
+echo "Generating data file ..."
+sleep 1
+python $s/../CoordinatesToWorkLammpsDataFile.py $output.coord data.$output -b
+
+echo "Generating charge_on_residues.dat..."
+sleep 1
+python $s/../seq_2_charge.py $output.seq charge_on_residues.dat
+rm $output.coord
+echo "Done generating input files: $output.in, $output.seq, data.$output, charge_on_residues.dat."
+$strideexec $pdbid.pdb > ssweight.stride
+python $stride2ssweightscript > ssweight	
+rm ssweight.stride
+
+#echo "you may want to try the automatic generation of fragsLAMW.mem.single file."
+#read -p "Do you wish to continue, Master?(y/n)" key
+chain_nos=`python $s/../get_PDB_chainIDs.py $pdbid | tail -n1 `
+echo "ChainIDs in the PDB file: $chain_nos "
+sleep 2
+mem=fragsLAMW.mem.single
+echo "Generating $mem for running single-fragment-memory simulations"
+key='y'
+if [ "$key" == 'y' ]; then
+	#read -p "Please enter the chain Number you are simulating, separated by spaces:" chain_nos 
+	chains=( $chain_nos )
+	echo "Generating Gro files from $pdbid.pdb..."	
+	rm -f $mem
+	echo "[Target]"     > $mem
+	printf "query\n\n" >> $mem
+	echo "[Memories]"  >> $mem
+	count=1
+	for i in ${chains[*]}; do
+		$s/../Gengro $pdbid.pdb $i
+		echo $i
+		j=`echo $i | tr '[:upper:]' '[:lower:]'`
+		res_start=`head -n3 $pdbid$j.gro | tail -n1 | awk '{print $1}'`
+		res_end=`tail -n1 $pdbid$j.gro | awk '{print $1}'`
+		chain_len=$(( $res_end - $res_start + 1 ))
+		echo $chain_len
+		echo "$pdbid$j.gro $count $res_start $chain_len 1" >> $mem
+		count=$(( $count + $chain_len ))
+	done
+else
+	echo "As you wish, Maseter! No fragsLAMW.mem.single file is created."
+fi
